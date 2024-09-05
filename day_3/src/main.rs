@@ -1,157 +1,215 @@
+use regex::Regex;
+use std::collections::BTreeMap;
 use std::fs;
+use std::str::Split;
 
-struct RowComponent {
-    value: String,
-    symbol_locations: Vec<usize>
+const ADJACENT_COORDS: [[i32; 2]; 8] = [
+    [-1, -1],
+    [-1, 0],
+    [-1, 1],
+    [0, -1],
+    [0, 1],
+    [1, -1],
+    [1, 0],
+    [1, 1],
+];
+
+#[derive(Clone, Debug, PartialEq)]
+struct Part {
+    value: u32,
+    digits: Vec<[i32; 2]>,
 }
 
-struct Symbol {
-    value: char,
-    pos: Vec<usize>,
-    parts: Vec<i32>
-}
-
-fn get_components_in_row(row: &str) -> Vec<RowComponent> {
-    let mut components = Vec::new();
-    let mut last = 0;
-    for (index, separator) in row.match_indices(|c: char| !(c.is_alphanumeric())) {
-        if last != index {
-            let mut start_position = last;
-            if start_position != 0 {
-                start_position -= 1;
-            }
-            let mut end_position = index;
-            if end_position != row.len() {
-                end_position += 1;
-            }
-            let row_component = RowComponent {
-                value: row[last..index].to_string(),
-                symbol_locations: (start_position..end_position).collect()
-            };
-            components.push(row_component);
-        }
-        // Generate the row component for the separator
-        components.push(RowComponent {
-            value: separator.to_string(),
-            symbol_locations: Vec::new()
-        });
-        last = index + separator.len();
+impl Part {
+    fn new(value: u32, digits: Vec<[i32; 2]>) -> Part {
+        Part { value, digits }
     }
-
-    if last < row.len() {
-        components.push(RowComponent {
-            value: row[last..].to_string(),
-            symbol_locations: (last - 1 .. row.len()).collect()
-        });
-    }
-
-    // Remove the last character as it is always a carriage return
-    components.pop();
-
-    // Calculate the positions of each of the components
-    return components;
-}
-
-fn is_part_valid(row: &str, pos: usize) -> bool {
-    if pos >= row.len() - 1 || pos < 0 {
-        return false;
-    }
-    let pos_to_check = row.chars().nth(pos).unwrap();
-    if !(pos_to_check.is_alphanumeric() || pos_to_check == '.') {
-        return true;
-    }
-    return false;
 }
 
 fn main() {
-    let input_string = fs::read_to_string("resources/part1/input.txt").expect("Unable to read file");
-    let input_vec: Vec<&str> =input_string.split("\n").collect();
+    let resources_path: &str = "resources";
+    println!("Calculating part 1");
+    let part1_path = resources_path.to_string() + "/input.txt";
+    let part1_schematic = fs::read_to_string(part1_path).expect("Could not read file");
 
-    let mut valid_parts: Vec<i32> = Vec::new();
-    let mut validator_symbols: Vec<Symbol> = Vec::new();
-    let mut valid_gears: Vec<i32> = Vec::new();
-    // Iterate through the input vector, each iteration is a new line
-    '_rows: for row in 0..input_vec.len() {
-        println!("{}", input_vec[row]);
-        // Split the row by it's separator to get the composite parts
-        let separated_row = get_components_in_row(input_vec[row]);
-        '_components: for component in separated_row {
-            // We only produce symbol locations for valid parts
-            if component.symbol_locations.len() > 0 {
-                // Check the corresponding symbol locations in relative rows to search for valid parts
-               '_inner: for loc in component.symbol_locations {
-                    if row > 0 {
-                        // Check the row above
-                        if is_part_valid(input_vec[row - 1], loc) {
-                            println!("Found valid part: {}", component.value);
-                            // Check if we already have a validator symbol for this position
-                            if validator_symbols.iter().find(|s| s.pos == [loc, row - 1]).is_some() {
-                                // Get the position of the matched validator symbol and push to it's part
-                                let symbol_pos = validator_symbols.iter().position(|s| s.pos == [loc, row - 1]).unwrap();
-                                validator_symbols.get_mut(symbol_pos).unwrap().parts.push(component.value.parse::<i32>().expect("Expected a number"));
-                            } else {
-                                validator_symbols.push(Symbol {
-                                    value: input_vec[row - 1].chars().nth(loc).unwrap(),
-                                    pos: vec![loc, row - 1],
-                                    parts: vec![component.value.parse::<i32>().expect("Expected a number").clone()]
-                                });
-                            }
-                            valid_parts.push(component.value.parse::<i32>().expect("Expected a number").clone());
-                        }
+    let part1_res = calc_part1(part1_schematic.as_str());
+    println!("Part 1: {}", part1_res);
+
+    println!("Calculating part 2");
+    let part2_res = calc_part2(part1_schematic.as_str());
+    println!("Part 2: {}", part2_res);
+}
+
+fn test_adjacent_cells(symbols: BTreeMap<[i32; 2], bool>, parts: Vec<[i32; 2]>) -> bool {
+    for [x, y] in parts.iter() {
+        for [i, j] in ADJACENT_COORDS.iter() {
+            if symbols
+                .keys()
+                .any(|&key| key[0] == x + i && key[1] == y + j)
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+fn get_symbols_from_schematic(
+    schematic: Split<'_, &str>,
+    symbol_re: Regex,
+) -> BTreeMap<[i32; 2], bool> {
+    let mut symbols: BTreeMap<[i32; 2], bool> = BTreeMap::new();
+
+    // Find all symbols in the schematic and store their position
+    for (i, line) in schematic.to_owned().enumerate() {
+        for (j, c) in line.chars().enumerate() {
+            if symbol_re.is_match(c.to_string().as_str()) {
+                // This is a symbol so store it's position
+                symbols.insert([j as i32, i as i32], true);
+            }
+        }
+    }
+    return symbols;
+}
+
+fn calc_part1(schematic: &str) -> u32 {
+    // Setup control vars
+    let mut sum: u32 = 0;
+    let symbol_re = Regex::new(r"[^.0-9]").unwrap();
+
+    let schematic_lines = schematic.split("\n");
+    let symbol_map = get_symbols_from_schematic(schematic_lines.to_owned(), symbol_re.to_owned());
+
+    // Track the current part value
+    let mut part: String = "".to_owned();
+    let mut part_pos: Vec<[i32; 2]> = Vec::new();
+    for (i, line) in schematic_lines.to_owned().enumerate() {
+        // If we have a part value when we start a line, we had a part
+        // at the end of the previous line.
+        if part != "" {
+            if test_adjacent_cells(symbol_map.clone(), part_pos.clone()) {
+                sum += part.parse::<u32>().unwrap();
+            }
+            part = "".to_owned();
+            part_pos.clear();
+        }
+        for (j, c) in line.chars().enumerate() {
+            if symbol_re.is_match(c.to_string().as_str()) || c == '.' {
+                if part != "" {
+                    if test_adjacent_cells(symbol_map.clone(), part_pos.clone()) {
+                        sum += part.parse::<u32>().unwrap();
                     }
-                    if row < input_vec.len() - 1  {
-                        // Check the row below
-                        if is_part_valid(input_vec[row + 1], loc) {
-                            println!("Found valid part: {}", component.value);
-                            // Check if we already have a validator symbol for this position
-                            if validator_symbols.iter().find(|s| s.pos == [loc, row + 1]).is_some() {
-                                // Get the position of the matched validator symbol and push to it's part
-                                let symbol_pos = validator_symbols.iter().position(|s| s.pos == [loc, row + 1]).unwrap();
-                                validator_symbols.get_mut(symbol_pos).unwrap().parts.push(component.value.parse::<i32>().expect("Expected a number"));
-                            } else {
-                                validator_symbols.push(Symbol {
-                                    value: input_vec[row + 1].chars().nth(loc).unwrap(),
-                                    pos: vec![loc, row + 1],
-                                    parts: vec![component.value.parse::<i32>().expect("Expected a number").clone()]
-                                });
-                            }
-                            valid_parts.push(component.value.parse::<i32>().expect("Expected a number").clone());
-                        }
-                    }
-                   // Check the current row
-                    if is_part_valid(input_vec[row], loc) {
-                        println!("Found valid part: {}", component.value);
-                        // Check if we already have a validator symbol for this position
-                        if validator_symbols.iter().find(|s| s.pos == [loc, row]).is_some() {
-                            // Get the position of the matched validator symbol and push to it's part
-                            let symbol_pos = validator_symbols.iter().position(|s| s.pos == [loc, row]).unwrap();
-                            validator_symbols.get_mut(symbol_pos).unwrap().parts.push(component.value.parse::<i32>().expect("Expected a number"));
-                        } else {
-                            validator_symbols.push(Symbol {
-                                value: input_vec[row].chars().nth(loc).unwrap(),
-                                pos: vec![loc, row],
-                                parts: vec![component.value.parse::<i32>().expect("Expected a number").clone()]
-                            });
-                        }
-                        valid_parts.push(component.value.parse::<i32>().expect("Expected a number").clone());
-                    }
+                }
+                // This isn't a part so reset the part
+                part = "".to_owned();
+                part_pos.clear();
+            }
+
+            if c.is_numeric() {
+                part += c.to_string().as_str();
+                part_pos.push([j as i32, i as i32]);
+            }
+        }
+    }
+
+    return sum;
+}
+
+fn calc_part2(schematic: &str) -> u32 {
+    let mut sum = 0;
+
+    // We only want to get the gears (denoted with '*')
+    let gear_re = Regex::new(r"\*").unwrap();
+
+    let schematic_lines = schematic.split("\n");
+    let gear_map = get_symbols_from_schematic(schematic_lines.to_owned(), gear_re.to_owned());
+
+    // Get the positions of all the parts.
+    let mut parts: Vec<Part> = Vec::new();
+    let mut part_value: String = "".to_owned();
+    let mut part_pos: Vec<[i32; 2]> = Vec::new();
+    for (i, line) in schematic_lines.to_owned().enumerate() {
+        if part_value != "" {
+            parts.push(Part::new(
+                part_value.parse::<u32>().unwrap(),
+                part_pos.to_owned(),
+            ));
+            part_value = "".to_owned();
+            part_pos.clear();
+        }
+
+        for (j, c) in line.chars().enumerate() {
+            if c.is_numeric() {
+                part_value += c.to_string().as_str();
+                part_pos.push([j as i32, i as i32]);
+            } else {
+                // This is a non-numeric character so if we have a part value then collect the part
+                if part_value != "" {
+                    parts.push(Part::new(
+                        part_value.parse::<u32>().unwrap(),
+                        part_pos.to_owned(),
+                    ));
+                    part_value = "".to_owned();
+                    part_pos.clear();
                 }
             }
         }
     }
 
-    // Sort out the gears
-    for symbol in validator_symbols {
-        if symbol.value == '*' {
-            // This is a gear
-            // A gear is only valid if there are exactly 2 parts associated with it
-            if (symbol.parts.len() == 2) {
-                valid_gears.push(symbol.parts[0] * symbol.parts[1]);
+    // Now we have all the location of gears and part numbers. Compare the gears to part numbers in associated positions.
+    for (_, gear) in gear_map.keys().enumerate() {
+        let mut adjacent_parts: Vec<Part> = Vec::new();
+        for [i, j] in ADJACENT_COORDS.iter() {
+            let found_parts: Vec<&Part> = parts
+                .iter()
+                .filter(|part| {
+                    part.digits
+                        .iter()
+                        .any(|&digit| digit[0] == gear[0] + i && digit[1] == gear[1] + j)
+                })
+                .collect();
+
+            for found_part in found_parts.iter().copied() {
+                if !adjacent_parts.contains(found_part) {
+                    adjacent_parts.push(found_part.clone());
+                }
             }
         }
-
+        if adjacent_parts.len() == 2 {
+            sum += adjacent_parts[0].value * adjacent_parts[1].value;
+        }
     }
 
-    println!("Summed valid parts: {}", valid_parts.iter().sum::<i32>());
-    println!("Summed valid gears: {}", valid_gears.iter().sum::<i32>());
+    return sum;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXAMPLE: &str = r#"
+467..114..
+...*......
+..35..633.
+......#...
+617*......
+.....+.58.
+..592.....
+......755.
+...$.*....
+.664.598..
+"#;
+
+    #[test]
+    fn example_returns_correct_value_part1() {
+        let part1 = calc_part1(EXAMPLE);
+        assert_eq!(part1, 4361);
+    }
+
+    #[test]
+    fn example_returns_correct_value_part2() {
+        let part2 = calc_part2(EXAMPLE);
+        assert_eq!(part2, 467835);
+    }
 }
